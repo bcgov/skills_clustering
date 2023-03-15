@@ -1,0 +1,372 @@
+---
+title: "Clustering NOCs based on ONET skills"
+format:
+  html:
+    embed-resources: true
+bibliography: references.bib
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+library(plyr)
+library(tidyverse)
+library(readxl)
+library(janitor)
+library(factoextra)
+library(hopkins)
+library(patchwork)
+library(clValid)
+library(plotly)
+library(dendextend)
+
+clValid_wrapper <- function(tbbl, metric){
+  results <- clValid(tbbl, nClust = 2:20,  clMethods = c("agnes","diana","kmeans","pam"), metric=metric, validation = "internal")
+   summary <- capture.output(summary(results))
+   return(summary)
+}
+
+my_dist_plot <- function(dist_mat, hopkins, title){
+  dist_mat%>%
+    fviz_dist(show_labels = FALSE)+
+    scale_fill_viridis_c()+
+    labs(title= title, 
+        subtitle = paste("Hopkins Statistic:", round(hopkins,2)))
+}
+
+#read in the skills data----------------------
+skills_2021 <- read_excel(here::here("data","Skills_27_1_NOC2021_data.xlsx"))%>%
+  pivot_wider(id_cols=contains("noc"), names_from = contains("skills"), values_from = contains("score"))%>%
+  clean_names()%>%
+  unite(NOC, noc2021, noc2021_title, sep = ": ")%>%
+  column_to_rownames(var="NOC")%>%
+  scale()%>%
+  as.data.frame()
+#do principal component
+skills_pca <- prcomp(skills_2021)
+screeplot <- fviz_eig(skills_pca) #first 5 components 
+importance <- summary(skills_pca)$importance[,1:5]
+first_five <- skills_pca[["x"]][,1:5]%>%
+  as.data.frame()
+#randomize data for comparison
+random_2021 <- skills_2021%>%
+  mutate(across(everything(), ~runif(length(.x), min(.x), max(.x))))
+```
+
+
+```{r, include=FALSE, cache=TRUE}
+tbbl <- tibble(data_set=c("2021", "random_2021", "first_five"), scaled=list(skills_2021, random_2021, first_five))%>%
+  mutate(hopkins=map_dbl(scaled, hopkins),
+         euc_dist=map(scaled, dist, method = "euclidean"),
+         man_dist=map(scaled, dist, method= "manhattan"),
+         euc_plot = map2(euc_dist, hopkins, my_dist_plot, "Euclidean distance."),
+         man_plot = map2(man_dist, hopkins, my_dist_plot, "Manhattan distance"),
+         clValid_euc=map(scaled, clValid_wrapper, metric="euclidean"),
+         clValid_man=map(scaled, clValid_wrapper, metric="manhattan"))
+```
+
+## Is the data clusterable?
+
+Clustering algorithms will form clusters even when data is uniformly distributed. The first step in cluster analysis is to investigate the underlying structure of the data in order to ensure that clustering is justifiable. The [Hopkins Statistic](https://en.wikipedia.org/wiki/Hopkins_statistic) gives a measure of whether the data can be clustered: a measure close to .5 indicates random data, whereas values close to 1 indicate clusterable data. We can also visualize the structure of the data by looking at the distance matrix. Two occupations that require the same skills will have a distance of zero, whereas the more different the occupations are the larger the distance will be. This raises the question of the distance metric to use: we consider two, Euclidean (as the crow flies) and Manhattan (as the New York resident walks). There is some evidence @aggarwal2001surprising that Manhattan distance might be more appropriate in high dimensional space.
+
+```{r, echo=FALSE, fig.height=4, fig.width=8}
+tbbl$euc_plot[tbbl$data_set=="2021"][[1]]+tbbl$man_plot[tbbl$data_set=="2021"][[1]]
+```
+
+In the above heatmaps the rows and columns are the 506 occupations, and the colour indicates the distance between any two occupations. Note that along the diagonal line distance is zero (the distance from an occupation to itself.) The clustering of the data can be inferred from the patchwork design of the plot: Occupations that are similar to one another in terms of skill requirements are grouped together, and the colour of the grouping is blueish. Occupations that differ markedly are located further apart, and the colour tends towards yellow. When we measure distance as Euclidean it appears that there are 3 main groupings of occupations in terms of skills, whereas if we utilize Manhattan distance it appears that there are 2 main groups. Of course there is some variation in colour within these main groups, suggesting that it might be appropriate to break the data down further.
+
+One potential way of addressing the problems associated with measuring distance in high dimensional data is to perform [principal component analysis](https://en.wikipedia.org/wiki/Principal_component_analysis) and then cluster on a subset of the principal componenents.  In the table below we see that the first 5 principal components contain 85% of the total variation in skills, and the 5th component only captures 2% of the variation (components 6-35 each contain even less.)
+
+```{r}
+importance%>%
+  as.data.frame()%>%
+  mutate(across(everything(), \(x) round(x, 2)))%>%
+  DT::datatable(options = list(dom = 't')) 
+```
+
+
+The relationship can also be depicted by what is known as a scree plot:
+
+```{r}
+screeplot
+```
+
+Next we look as the distance matrices based on the first 5 principal components. 
+
+```{r, echo=FALSE, fig.height=4, fig.width=8}
+tbbl$euc_plot[tbbl$data_set=="first_five"][[1]]+tbbl$man_plot[tbbl$data_set=="first_five"][[1]]
+```
+
+There are a couple differences of note when compared with the distance plots based on the original (35D) data. Regarding the Euclidean distance metric, now rather than looking like there are 3 main clusters it looks like there are more (well defined) smaller clusters: these look like small blue squares along the diagonal, of which I count at least 11. The Manhattan distance plot now looks more similar to the Euclidean distance plot than it did based on the original (35D) data, and the two distance measures are closer in 5D than they were in 35D. 
+
+If the skill profiles of occupations were independent the distance matrix would look much different. To investigate, for each skill we replace each NOC's value with a random draw from the uniform distribution with the same [support](https://en.wikipedia.org/wiki/Support_(mathematics)) as the skill:
+
+```{r, echo=FALSE, fig.height=4, fig.width=8}
+tbbl$euc_plot[tbbl$data_set=="random_2021"][[1]]+tbbl$man_plot[tbbl$data_set=="random_2021"][[1]]
+```
+
+Now all occupations are roughly the same distance apart from all other occupations, with the exception of distance to oneself: the random data is not cluster-able, whereas the skills data is. Based on the above, it appears to be optimal to cluster the data based on the first 5 principal components using Euclidean distance and setting the number of clusters to be 11. But how to cluster?
+
+## Algorithms considered
+
+### Agnes
+
+-  Agglomerative clustering is the most common type of hierarchical clustering
+use to group objects in clusters based on their similarity. 
+- It's also known as AGNES (Agglomerative Nesting). 
+  - The algorithm starts by treating each object as a singleton cluster. 
+  - Next, pairs of clusters are successively merged until all clusters have
+been merged into one big cluster containing all objects. 
+-  The result is a tree-based representation of the objects, named dendrogram.
+- Agglomerative clustering works in a bottom-up manner. 
+- Each object is initially considered as a single-element cluster (leaf). 
+- At each step of the algorithm, the two clusters that are the most similar are combined into a new bigger cluster
+(nodes). 
+- This procedure is iterated until all points are member of just one single big
+cluster (root).
+
+
+### Diana
+
+- The inverse of agglomerative clustering is divisive clustering, which is also known as
+DIANA (Divise Analysis) and it works in a top-down manner. 
+    - It begins with the root, in which all objects are included in a single cluster. 
+    - At each step of iteration, the most heterogeneous cluster is divided into two. 
+    - The process is iterated until all objects are in their own cluster.
+
+### K-means
+
+- K-means clustering (MacQueen, 1967) is the most commonly used unsupervised
+machine learning algorithm for partitioning a given data set into a set of k groups (i.e.
+k clusters), where k represents the number of groups pre-specified by the analyst. 
+- It classifies objects in multiple groups (i.e., clusters), such that objects within the same
+cluster are as similar as possible (i.e., high intra-class similarity), whereas objects
+from different clusters are as dissimilar as possible (i.e., low inter-class similarity).
+- In k-means clustering, each cluster is represented by its center (i.e, centroid) which
+corresponds to the mean of points assigned to the cluster.
+    - The algorithm starts by randomly selecting k objects from the data set to serve as the
+initial centers for the clusters. The selected objects are also known as cluster means or centroids.
+    - Cluster assignment: each of the remaining objects is assigned to it’s closest centroid, where closest is
+defined using either Euclidean or Manhattan distance between the object and the cluster
+mean.
+    - Centroid Update: After the assignment step, the algorithm computes the new mean value of each cluster.
+    - After the centers have been recalculated, every observation is checked again to see if it might be closer
+to a different cluster. 
+    - All the objects are reassigned again using the updated cluster means.
+    - The cluster assignment and centroid update steps are iteratively repeated until the
+cluster assignments stop changing (i.e until convergence is achieved).
+
+### PAM
+
+-  The k-medoids algorithm is a clustering approach related to k-means clustering. 
+- In k-medoids clustering, each cluster is represented by one of the data point in the cluster. 
+- These points are named cluster medoids.
+- The term medoid refers to an object within a cluster for which average dissimilarity between it and all the other the members of the cluster is minimal. 
+- It corresponds to the most centrally located point in the cluster.
+- These objects (one per cluster) can be considered as a representative example of the members of that cluster.
+- K-medoid is a robust alternative to k-means clustering. 
+- This means that, the algorithm is less sensitive to noise and outliers, compared to k-means, because it uses medoids
+as cluster centers instead of means.
+    1. The algorithm starts by randomly selecting k objects to become the medoids.
+    2. Assign every object to its closest medoid.
+    3. For each cluster, search if any of the object of the cluster decreases the average dissimilarity; if it does, select the entity as the new medoid.
+    4. If at least one medoid has changed go back to 2; else end the algorithm.
+
+## Measures to assess the models:
+
+We need to assess which is the best clustering algorithm to use and specify the number of clusters we want.  We can assess the algorithms based on the following measures:
+
+### Connectivity
+
+- Corresponds to what extent items are placed in the same cluster as their nearest neighbors in the data space. 
+  - Let $N$ denote the total number of observations (rows) in a dataset and
+$M$ denote the total number of columns.
+  - Define $nn_{i(j)}$ as the $j$th nearest neighbor of observation $i$, and let $x_{i,nn_{i(j)}}$ be zero if $i$ and $j$ are
+in the same cluster and $1/j$ otherwise. 
+  - For a particular clustering partition $C = \{C_1 , . . . , C_K \}$ of the $N$ observations into $K$ disjoint clusters,
+the connectivity is defined as:
+$$Conn(C) = \sum^{N}_{i=1}\sum^{L}_{j=1}x_{i,nn_{i(j)}}$$
+where $L$ is a parameter giving the number of nearest neighbors to use. 
+- The connectivity has a value between zero and $\infty$ and should be minimized.
+
+### Dunn
+
+- The Dunn index is another internal clustering validation measure which can be
+computed as follow:
+    1. For each cluster, compute the distance between each of the objects in the cluster
+and the objects in the other clusters
+    2. Use the minimum of this pairwise distance as the inter-cluster separation
+(min.separation)
+    3. For each cluster, compute the distance between the objects in the same cluster.
+    4. Use the maximal intra-cluster distance (i.e maximum diameter) as the intra-
+cluster compactness
+    5. Calculate the Dunn index (D) as follow: $D=\frac{min.separation}{max.diameter}$
+- If the data set contains compact and well-separated clusters, the diameter of the
+clusters is expected to be small and the distance between the clusters is expected to
+be large. 
+- Large values of the Dunn index are desirable.
+
+### Silhouette
+
+- The silhouette analysis measures how well an observation is clustered and it estimates
+the average distance between clusters. 
+- For each observation $i$, the silhouette width $s_i$ is calculated as follows:
+    1. For each observation i, calculate the average dissimilarity $a_i$ between $i$ and all
+other points of the cluster to which $i$ belongs.
+    2. For all other clusters $C$, to which $i$ does not belong, calculate the average
+dissimilarity $d(i, C)$ of $i$ to all observations of $C$. The smallest of these $d(i, C)$
+is defined as $b_i = \min_{C} d(i, C)$. The value of $b_i$ can be seen as the dissimilarity
+between $i$ and its neighbor cluster, i.e., the nearest one to which it does not
+belong.
+    3. The silhouette width of the observation $i$ is defined by the formula:
+$S_i = (b_i - a_i )/max(a_i , b_i )$.
+- Silhouette width can be interpreted as follow:
+  - Observations with a large $S_i$ (almost 1) are very well clustered.
+  - A small $S_i$ (around 0) means that the observation lies between two clusters.
+  - Observations with a negative $S_i$ are probably placed in the wrong cluster.
+
+## What algorithm and what K?
+
+The function [clValid]( https://CRAN.R-project.org/package=clValid) tests for what algorithm/K combination maximizes the above (internal) measures of validity. Based on the dimensionality of the data and the distance metric utilized we can see the following: 
+
+- Agnes (agglomerative hierarchical clustering) is typically the "best" algorithm.
+- If the number of clusters was chosen on the basis of Connectivity or Silhouette width the optimal number of clusters would be two small (pun intended).
+- In contrast the Dunn index is maximized using 35D data with Euclidean distance and 11 clusters. 
+
+### 35D data, Euclidean distance
+
+```{r}
+tbbl$clValid_euc[tbbl$data_set=="2021"][[1]][24:30]
+```
+
+### 35D data, Manhattan distance
+
+```{r}
+tbbl$clValid_man[tbbl$data_set=="2021"][[1]][24:30]
+```
+
+
+### 5D data, Euclidean distance
+
+```{r}
+tbbl$clValid_euc[tbbl$data_set=="first_five"][[1]][24:30]
+```
+
+### 5D data, Manhattan distance
+
+```{r}
+tbbl$clValid_man[tbbl$data_set=="first_five"][[1]][24:30]
+```
+
+## Models fit:
+
+Based on the above we proceed with 2 candidate algorithms:
+
+- Agnes, 5D data, 11 clusters, Euclidean distance (suggested by visual inspection of Distance matrix)
+
+```{r, warning=FALSE}
+vis_mod <- eclust(tbbl$scaled[tbbl$data_set=="first_five"][[1]], FUNcluster = "agnes", k=11, hc_metric = "euclidean", hc_method = "ward.D2")
+plt <- fviz_silhouette(vis_mod, print.summary = FALSE)
+ggplotly(plt, tooltip = "name")
+```
+
+
+```{r, warning=FALSE, fig.height=10}
+plt <- fviz_dend(vis_mod, horiz = TRUE, show_labels = TRUE)
+ggplotly(plt, tooltip = "label")%>%
+          style(textposition = "right")
+```
+
+- Agnes, 35D data,  11 clusters, Euclidean distance (suggested by maximal value of Dunn statistic)
+
+```{r, warning=FALSE}
+dunn_mod <- eclust(tbbl$scaled[tbbl$data_set=="2021"][[1]], FUNcluster = "agnes", k=11, hc_metric = "euclidean", hc_method = "ward.D2")
+plt <- fviz_silhouette(dunn_mod, print.summary = FALSE)
+ggplotly(plt, tooltip = "name")
+```
+
+
+```{r, warning=FALSE, fig.height=10}
+plt <- fviz_dend(dunn_mod, horiz = TRUE, show_labels = TRUE)
+ggplotly(plt, tooltip = "label")%>%
+          style(textposition = "right")
+vis_dend <- as.dendrogram(vis_mod)
+dunn_dend <- as.dendrogram(dunn_mod)
+```
+
+## Compare the two models:
+
+The silhouette and dendogram plots of the two models look similar but it would be good if we could quantify the differences between the two dendrograms.  We consider two measures: entanglement @kassambara2017practical and the [cophenetic correlation](https://en.wikipedia.org/wiki/Cophenetic_correlation). 
+
+Entanglement measures the extent to which the labels of the dendrograms match up.  Values close to zero indicate similarity whereas an entanglement of 1 indicates no similarity.  For our two models entanglement is `r round(entanglement(vis_dend, dunn_dend), 2)`, indicating similarity between the two models. 
+
+The cophenetic distance between two observations that have been clustered is defined to be the intergroup dissimilarity at which the two observations are first combined into a single cluster. The cophenetic correlation is the correlation between two cophenetic distance matrices of the two trees.  For our two models the cophenetic correlation is `r round(cor_cophenetic(vis_mod, dunn_mod),2)`, once again indicating similarity between the two models.
+
+## Chosen algorithm:
+
+Recall that for Agnes, 5D data, 11 clusters, Euclidean distance the average silhouette width was `r round(vis_mod$silinfo$avg.width, 2)`, where as for Agnes, 35D data, 11 clusters, Euclidean distance the average silhouette width was `r round(dunn_mod$silinfo$avg.width,2)`. Because a higher average silhouette width is desirable, we proceed with Agnes, 5D data, 11 clusters, Euclidean distance.  Note that even though the average silhouette value is higher, there are still some NOCs that have negative silhouette widths, indicating assignment to the wrong cluster. In the table below we report both the original and corrected cluster assignments, where we move NOCs that have a negative silhouette value to their closest neighbour cluster.  
+
+```{r}
+vis_sil <- vis_mod$silinfo$widths[, 1:3]%>%
+  mutate(cluster=as.character(cluster),
+         neighbor=as.character(neighbor))
+vis_clusters <- vis_sil%>%
+  mutate(corrected_cluster=if_else(sil_width>0, cluster, neighbor))%>%
+  rownames_to_column(var="NOC")%>%
+  mutate(NOC=trimws(NOC))%>%
+  arrange(sil_width)
+DT::datatable(vis_clusters, rownames = FALSE)
+```
+
+## Cluster Means:
+
+Next we attach the cluster assignments to the scaled data and then calculate cluster means for each skill.  It would be nice to see how the cluster means are arranged relative to one another. To do so we can use a biplot, which takes high dimensional data (we have 35 skills) and represents it in 2 dimensional space. 
+
+```{r}
+skills <- tbbl$scaled[tbbl$data_set=="2021"][[1]]%>% 
+  rownames_to_column(var="NOC")%>%
+  mutate(NOC=trimws(NOC))%>%
+  full_join(vis_clusters)%>%
+  select(-neighbor,-sil_width)%>%
+  select(NOC, cluster, corrected_cluster, everything())
+
+cluster_ave <- skills%>%
+  group_by(cluster)%>%
+  summarize(across(where(is.numeric), mean))
+
+corrected_ave <- skills%>%
+  group_by(corrected_cluster)%>%
+  summarize(across(where(is.numeric), mean))
+
+```
+
+## Biplot of corrected cluster means:
+
+Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point south-west (ish), indicating this is where high skill NOCs will be located (e.g. NOCs in clusters 7).  In the south direction the skills are hard (making and fixing things), whereas in the west the skills are soft (managing people). If high skill NOCs are located to the South-West, then low skill NOCs will be found to the North-East (e.g NOCs in cluster 11). 
+
+
+```{r, fig.height=8, fig.width=8}
+corrected_res <- corrected_ave%>%
+  column_to_rownames(var="corrected_cluster")%>%
+  prcomp()
+ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$corrected_cluster, varname.size = 1.5, var.scale = .5)+
+  theme_minimal()
+```
+
+## Finally, the data:
+
+```{r}
+skills%>%
+  mutate(cluster=as.factor(cluster),
+         corrected_cluster=as.factor(corrected_cluster))%>%
+  arrange(cluster)%>%
+  DT::datatable(filter = 'top',
+                rownames = FALSE, 
+                extensions = c('Buttons', 'FixedColumns'),
+    options = list(
+    pageLength = 10,
+    dom = 'Bfrtip',
+    scrollX = TRUE,
+    buttons = c('csv', 'excel')))
+```
+
+# References
