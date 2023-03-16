@@ -7,6 +7,20 @@ bibliography: references.bib
 ---
 
 ```{r, include=FALSE}
+set.seed(123)
+cluster_names <- tibble::tibble(corrected_cluster=as.character(1:11), 
+                        description=c("Supervisors (services)",
+                                      "Managers",
+                                      "Investigators",
+                                      "Writers",
+                                      "Clerks",
+                                      "Technicians",
+                                      "Engineers",
+                                      "Supervisors (goods)",
+                                      "Operators",
+                                      "Trades",
+                                      "Labourers"))
+
 knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
 library(plyr)
 library(tidyverse)
@@ -326,29 +340,26 @@ skills <- tbbl$scaled[tbbl$data_set=="2021"][[1]]%>%
   rownames_to_column(var="NOC")%>%
   mutate(NOC=trimws(NOC))%>%
   full_join(vis_clusters)%>%
-  select(-neighbor,-sil_width)%>%
-  select(NOC, cluster, corrected_cluster, everything())
-
-cluster_ave <- skills%>%
-  group_by(cluster)%>%
-  summarize(across(where(is.numeric), mean))
+  full_join(cluster_names)%>%
+  select(-neighbor)%>%
+  select(NOC, cluster, sil_width, corrected_cluster, description, everything())
 
 corrected_ave <- skills%>%
-  group_by(corrected_cluster)%>%
+  group_by(description)%>%
   summarize(across(where(is.numeric), mean))
 
 ```
 
 ## Biplot of corrected cluster means:
 
-Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point south-west (ish), indicating this is where high skill NOCs will be located (e.g. NOCs in clusters 7).  In the south direction the skills are hard (making and fixing things), whereas in the west the skills are soft (managing people). If high skill NOCs are located to the South-West, then low skill NOCs will be found to the North-East (e.g NOCs in cluster 11). 
+Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point south-east (ish), indicating this is where high skill NOCs will be located (e.g. Engineers).  In the south direction the skills are hard (making and fixing things), whereas in the east the skills are soft (managing people). If high skill NOCs are located to the South-East, then low skill NOCs will be found to the North-West (e.g Labourers). 
 
 
 ```{r, fig.height=8, fig.width=8}
 corrected_res <- corrected_ave%>%
-  column_to_rownames(var="corrected_cluster")%>%
+  column_to_rownames(var="description")%>%
   prcomp()
-ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$corrected_cluster, varname.size = 1.5, var.scale = .5)+
+ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$description, varname.size = 1.5, var.scale = .5, labels.size = 2)+
   theme_minimal()
 ```
 
@@ -357,8 +368,11 @@ ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$corrected_cluster, varn
 ```{r}
 skills%>%
   mutate(cluster=as.factor(cluster),
-         corrected_cluster=as.factor(corrected_cluster))%>%
-  arrange(cluster)%>%
+         corrected_cluster=as.factor(corrected_cluster),
+         description=as.factor(description),
+         across(where(is.numeric), \(x) round(x, 3)))%>%
+  arrange(desc(sil_width))%>%
+  select(NOC, cluster, sil_width, corrected_cluster, description, everything())%>%
   DT::datatable(filter = 'top',
                 rownames = FALSE, 
                 extensions = c('Buttons', 'FixedColumns'),
