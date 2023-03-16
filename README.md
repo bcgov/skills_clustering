@@ -5,7 +5,7 @@ skills_clustering
 
 ### Usage
 
-In Rstudio render the file cluster_note.qmd
+In Rstudio open and then render the file cluster_note.qmd
 
 ### Project Status
 
