@@ -36,8 +36,6 @@ library(dendextend)
 clValid_wrapper <- function(tbbl, metric){
   clValid(tbbl, nClust = 2:20,  clMethods = c("agnes","diana","kmeans","pam"), metric=metric, validation = "internal")%>%
   optimalScores()
-  # summary <- capture.output(summary(results))
-  # return(summary)
 }
 
 my_dist_plot <- function(dist_mat, hopkins, title){
