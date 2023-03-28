@@ -1,5 +1,5 @@
 ---
-title: "Clustering NOCss based on ONET skills"
+title: "Clustering NOCs based on ONET skills"
 format:
   html:
     embed-resources: true
