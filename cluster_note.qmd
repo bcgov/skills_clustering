@@ -1,5 +1,5 @@
 ---
-title: "Clustering NOC based on ONET skills"
+title: "Clustering NOCs based on ONET skills"
 format:
   html:
     embed-resources: true
@@ -8,20 +8,6 @@ bibliography: references.bib
 
 ```{r, include=FALSE}
 set.seed(1234)
-cluster_names <- tibble::tibble(cluster_number=as.character(1:11), 
-                        description=c("Supervisors (services)",
-                                      "Managers",
-                                      "Investigators",
-                                      "Writers",
-                                      "Clerks",
-                                      "Technicians",
-                                      "Engineers",
-                                      "Supervisors (goods)",
-                                      "Operators",
-                                      "Trades",
-                                      "Labourers"))
-
-knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
 library(plyr)
 library(tidyverse)
 library(readxl)
@@ -32,7 +18,8 @@ library(patchwork)
 library(clValid)
 library(plotly)
 library(dendextend)
-
+knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
+#functions-----------------------------------
 clValid_wrapper <- function(tbbl, metric){
   clValid(tbbl, nClust = 2:20,  clMethods = c("agnes","diana","kmeans","pam"), metric=metric, validation = "internal")%>%
   optimalScores()
@@ -46,7 +33,12 @@ my_dist_plot <- function(dist_mat, hopkins, title){
         subtitle = paste("Hopkins Statistic:", round(hopkins,2)))
 }
 
-#read in the skills data----------------------
+#read in the data----------------------
+cluster_names <- read_csv(here::here("data","cluster_names.csv"), col_types = cols(
+  cluster_number = col_character(),
+  description = col_character()
+))
+
 skills_2021 <- read_excel(here::here("data","Skills_27_1_NOC2021_data.xlsx"))%>%
   pivot_wider(id_cols=contains("noc"), names_from = contains("skills"), values_from = contains("score"))%>%
   clean_names()%>%
@@ -360,22 +352,45 @@ corrected_ave <- skills%>%
 
 ## Biplot of new cluster means:
 
-Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point south-east (ish), indicating this is where high skill NOCs will be located (e.g. Engineers).  In the south direction the skills are hard (making and fixing things), whereas in the east the skills are soft (managing people). If high skill NOCs are located to the South-East, then low skill NOCs will be found to the North-West (e.g Labourers). 
+Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point northwest (ish), indicating this is where high skill NOCs will be located (e.g. STEM).  In the north direction the skills are hard (making and fixing things), whereas in the west the skills are soft (managing people). If high skill NOCs are located to the Northwest, then low skill NOCs will be found to the Southeast (e.g Doers). 
 
 
 ```{r, fig.height=8, fig.width=8}
 corrected_res <- corrected_ave%>%
   column_to_rownames(var="new_cluster")%>%
   prcomp()
-ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$new_cluster, varname.size = 1.5, var.scale = .5, labels.size = 2)+
+plt <- ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$new_cluster, varname.size = 1.5, var.scale = .5, labels.size = 2)+
   theme_minimal()
+plotly::ggplotly(plt, tooltip = "varname")
 ```
+
+## Relationship between TEER and New clusters:
+
+```{r}
+cluster_vs_teer <- skills%>%
+  mutate(teer=str_sub(NOC, 2,2), .after=NOC)%>%
+  tabyl(new_cluster, teer)
+colnames(cluster_vs_teer) <- c("Cluster", paste0("TEER: ", 0:5))
+
+DT::datatable(cluster_vs_teer, options=list(dom="t"), rownames = FALSE)
+```
+
+Note the strong relationship between our clusters and the TEER clasifications.
+
+```{r, warning=FALSE}
+chisq.test(cluster_vs_teer)
+```
+
+
 
 ## Finally, the data:
 
 ```{r}
 skills%>%
-  mutate(across(where(is.numeric), \(x) round(x, 3)))%>%
+  mutate(across(where(is.numeric), \(x) round(x, 3)),
+         TEER=str_sub(NOC,2,2), .after="NOC",
+         across(where(is.character), \(x) as.factor(x))
+         )%>%
   arrange(new_cluster, desc(sil_width))%>%
   DT::datatable(filter = 'top',
                 rownames = FALSE, 
