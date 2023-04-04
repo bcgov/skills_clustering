@@ -228,6 +228,14 @@ $S_i = (b_i - a_i )/max(a_i , b_i )$.
   - Observations with a large $S_i$ (almost 1) are very well clustered.
   - A small $S_i$ (around 0) means that the observation lies between two clusters.
   - Observations with a negative $S_i$ are probably placed in the wrong cluster.
+- A simple example:
+  - Consider a case where we want to calculate the silhouette width of an observation $x_1$ in cluster $x$ with two other member $x_2$ and $x_3$, and the nearest other cluster $y$ has two members $y_1$ and $y_2$.
+  - Suppose that the distance between $x_1$ and $x_2$ is 1.2, and the distance between $x_1$ and $x_3$ is .8.
+  - Thus the average dissimilarity between $x_1$ and all other points in cluster is $a_{x_1}=1$.
+  - Further, suppose that the distance between $x_1$ and $y_1$ is 1.6, and the distance between $x_1$ and $y_2$ is 1.4.
+  - Thus the average dissimilarity between $x_1$ and all points in the nearest other cluster is $b_{x_1}=1.5$.
+  - The silhouette value for $x_1$ is $\frac{.5}{1.5}=\frac13$.
+  - In other words, if the closest other cluster is (on average) 50% further away than the other observations in cluster then the silhouette value will be $\frac13$. 
 
 ## What algorithm and what K?
 
