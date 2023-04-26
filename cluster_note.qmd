@@ -39,13 +39,16 @@ cluster_names <- read_csv(here::here("data","cluster_names.csv"), col_types = co
   description = col_character()
 ))
 
-skills_2021 <- read_excel(here::here("data","Skills_27_1_NOC2021_data.xlsx"))%>%
+skills_raw <- read_excel(here::here("data","Skills_27_1_NOC2021_data.xlsx"))%>%
   pivot_wider(id_cols=contains("noc"), names_from = contains("skills"), values_from = contains("score"))%>%
   clean_names()%>%
   unite(NOC, noc2021, noc2021_title, sep = ": ")%>%
-  column_to_rownames(var="NOC")%>%
+  column_to_rownames(var="NOC")
+
+skills_2021 <- skills_raw%>%
   scale()%>%
   as.data.frame()
+
 #do principal component
 skills_pca <- prcomp(skills_2021)
 screeplot <- fviz_eig(skills_pca) #first 5 components 
@@ -352,10 +355,23 @@ skills <- tbbl$scaled[tbbl$data_set=="2021"][[1]]%>%
   full_join(vis_clusters)%>%
   select(NOC, original_cluster, sil_width, new_cluster, everything())
 
+skills_raw_for_tbbl <- skills_raw%>%
+  rownames_to_column(var="NOC")%>%
+  mutate(NOC=trimws(NOC))%>%
+  full_join(vis_clusters)%>%
+  select(NOC, original_cluster, sil_width, new_cluster, everything())
+
 corrected_ave <- skills%>%
   select(-sil_width)%>%
   group_by(new_cluster)%>%
   summarize(across(where(is.numeric), mean))
+
+top_five <- corrected_ave%>%
+  pivot_longer(cols=-new_cluster, names_to ="skill", values_to = "scaled_score")%>%
+  group_by(new_cluster)%>%
+  arrange(new_cluster, desc(scaled_score))%>%
+  slice_max(order_by=scaled_score, n=5)
+
 ```
 
 ## Biplot of new cluster means:
@@ -370,6 +386,20 @@ corrected_res <- corrected_ave%>%
 plt <- ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$new_cluster, varname.size = 1.5, var.scale = .5, labels.size = 2)+
   theme_minimal()
 plotly::ggplotly(plt, tooltip = "varname")
+```
+
+## Top 5 skills of each cluster:
+
+```{r}
+top_five%>%
+DT::datatable(filter = 'top',
+                rownames = FALSE, 
+                extensions = c('Buttons', 'FixedColumns'),
+    options = list(
+    pageLength = 10,
+    dom = 'Bfrtip',
+    scrollX = TRUE,
+    buttons = c('csv', 'excel')))
 ```
 
 ## Relationship between TEER and New clusters:
@@ -394,7 +424,7 @@ chisq.test(cluster_vs_teer)
 ## Finally, the data:
 
 ```{r}
-skills%>%
+skills_raw_for_tbbl%>%
   mutate(across(where(is.numeric), \(x) round(x, 3)),
          TEER=str_sub(NOC,2,2), .after="NOC",
          across(where(is.character), \(x) as.factor(x))
