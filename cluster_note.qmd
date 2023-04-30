@@ -18,6 +18,8 @@ library(patchwork)
 library(clValid)
 library(plotly)
 library(dendextend)
+library(here)
+library(ggalluvial)
 knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
 #functions-----------------------------------
 clValid_wrapper <- function(tbbl, metric){
@@ -34,6 +36,11 @@ my_dist_plot <- function(dist_mat, hopkins, title){
 }
 
 #read in the data----------------------
+
+mapping <- read_csv(here("data","noc_mapping.csv"))%>%
+  clean_names()%>%
+  mutate(noc_2016_v1_3_title=make_clean_names(noc_2016_v1_3_title))
+
 cluster_names <- read_csv(here::here("data","cluster_names.csv"), col_types = cols(
   cluster_number = col_character(),
   description = col_character()
@@ -305,17 +312,8 @@ ggplotly(plt, tooltip = "name")
 plt <- fviz_dend(dunn_mod, horiz = TRUE, show_labels = TRUE)
 ggplotly(plt, tooltip = "label")%>%
           style(textposition = "right")
-vis_dend <- as.dendrogram(vis_mod)
-dunn_dend <- as.dendrogram(dunn_mod)
 ```
 
-## Compare the two models:
-
-The silhouette and dendogram plots of the two models look similar but it would be good if we could quantify the differences between the two dendrograms.  We consider two measures: entanglement @kassambara2017practical and the [cophenetic correlation](https://en.wikipedia.org/wiki/Cophenetic_correlation). 
-
-Entanglement measures the extent to which the labels of the dendrograms match up.  Values close to zero indicate similarity whereas an entanglement of 1 indicates no similarity.  For our two models entanglement is `r round(entanglement(vis_dend, dunn_dend), 2)`, indicating similarity between the two models. 
-
-The cophenetic distance between two observations that have been clustered is defined to be the intergroup dissimilarity at which the two observations are first combined into a single cluster. The cophenetic correlation is the correlation between two cophenetic distance matrices of the two trees.  For our two models the cophenetic correlation is `r round(cor_cophenetic(vis_mod, dunn_mod),2)`, once again indicating similarity between the two models.
 
 ## Chosen algorithm:
 
@@ -343,6 +341,61 @@ Recall that for Agnes, 5D data, 11 clusters, Euclidean distance the average silh
 ```{r}
 DT::datatable(filter(vis_clusters, sil_width<0), rownames = FALSE)
 ```
+
+## Different than the Conference Board:
+
+It is known that the Conference Board created its clusters using K-means clustering with 8 clusters using NOC 2016 data, but beyond that their method is somewhat of a black box.  If we map from 2016 NOCs to 2021 NOCs we can create an alluvium plot that show how the occupations from the Conference Board clusters are split among our clusters.
+
+```{r, warning=FALSE}
+our_clusters <- vis_clusters%>%
+  separate(NOC, into= c("noc_2021_v1_0_code","description"), sep = ":")%>%
+  select(noc_2021_v1_0_code, new_cluster)
+
+get_conf <- function(name, range){
+  tibble(noc_2016_name=read_excel(here("data", "conf_clusters.xlsx"), range = range, col_names = FALSE)%>%
+           unlist()%>%
+           na.omit()%>%
+           as.vector())
+}
+
+cluster <- c("STEM Professions",
+             "Knowledge Workers",
+             "Personal Services",
+             "Supervisors",
+             "Technical Trades",
+             "Non-technical Trades",
+             "Builders",
+             "Doers")
+
+range <- c("a2:f10", "a12:f29", "a31:f44", "a46:f61", "a63:f75", "a77:f87","a89:f105","a107:f113")
+
+tbbl <- tibble(conf_cluster=cluster, range=range)%>%
+  mutate(data=map2(cluster, range, get_conf))%>%
+  unnest(data)%>%
+  select(-range)%>%
+  mutate(noc_2016_v1_3_title=make_clean_names(noc_2016_name))%>%
+  left_join(mapping)%>%
+  select(conf_cluster, noc_2021_v1_0_code, noc_2021_title)%>%
+  mutate(noc_2021_v1_0_code=as.character(noc_2021_v1_0_code))%>%
+  inner_join(our_clusters)
+
+grouped <- tbbl%>%
+  group_by(conf_cluster, new_cluster)%>%
+  summarize(freq=n())
+
+ggplot(data = grouped,
+       aes(axis1 = conf_cluster, axis2 = new_cluster, y = freq)) +
+  geom_alluvium(aes(fill = conf_cluster)) +
+  geom_stratum() +
+  geom_text(stat = "stratum",
+            aes(label = after_stat(stratum)))+
+  labs(fill="Confrence Board Clusters")+
+  theme_void()
+```
+
+## Higher silhouette value that the Conference Board:
+
+
 
 ## Cluster Means:
 
