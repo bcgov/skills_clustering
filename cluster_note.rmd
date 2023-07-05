@@ -1,9 +1,13 @@
 ---
 title: "Clustering NOCs based on ONET skills"
-format:
-  html:
+author: "Richard Martin"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    theme: united
     embed-resources: true
-bibliography: references.bib
+bibliography: references.bib  
 ---
 
 ```{r, include=FALSE}
@@ -20,6 +24,8 @@ library(plotly)
 library(dendextend)
 library(here)
 library(ggalluvial)
+library(ggbiplot)
+library(fpc)
 knitr::opts_chunk$set(echo=FALSE, message=FALSE, warning = FALSE)
 #functions-----------------------------------
 clValid_wrapper <- function(tbbl, metric){
@@ -46,30 +52,32 @@ cluster_names <- read_csv(here::here("data","cluster_names.csv"), col_types = co
   description = col_character()
 ))
 
-skills_raw <- read_excel(here::here("data","Skills_27_1_NOC2021_data.xlsx"))%>%
-  pivot_wider(id_cols=contains("noc"), names_from = contains("skills"), values_from = contains("score"))%>%
+skills_raw <- read_excel(here::here("data","skills_original.xlsx"),
+                             col_types = c("text","text","text","numeric"))%>%
+  mutate(noc2021=str_pad(noc2021, width=5, side="left", pad="0"))%>%
+  pivot_wider(id_cols=contains("noc"), names_from = contains("name"), values_from = contains("value"))%>%
   clean_names()%>%
   unite(NOC, noc2021, noc2021_title, sep = ": ")%>%
   column_to_rownames(var="NOC")
 
-skills_2021 <- skills_raw%>%
+skills_scaled <- skills_raw%>%
   scale()%>%
   as.data.frame()
 
 #do principal component
-skills_pca <- prcomp(skills_2021)
-screeplot <- fviz_eig(skills_pca) #first 5 components 
-importance <- summary(skills_pca)$importance[,1:5]
+skills_pca <- prcomp(skills_scaled)
+screeplot <- fviz_eig(skills_pca)  
+importance <- summary(skills_pca)$importance[,1:5]#first 5 components 
 first_five <- skills_pca[["x"]][,1:5]%>%
   as.data.frame()
 #randomize data for comparison
-random_2021 <- skills_2021%>%
+random_2021 <- skills_scaled%>%
   mutate(across(everything(), ~runif(length(.x), min(.x), max(.x))))
 ```
 
 
 ```{r, include=FALSE, cache=TRUE}
-tbbl <- tibble(data_set=c("2021", "random_2021", "first_five"), scaled=list(skills_2021, random_2021, first_five))%>%
+tbbl <- tibble(data_set=c("2021", "random_2021", "first_five"), scaled=list(skills_scaled, random_2021, first_five))%>%
   mutate(hopkins=map_dbl(scaled, hopkins),
          euc_dist=map(scaled, dist, method = "euclidean"),
          man_dist=map(scaled, dist, method= "manhattan"),
@@ -127,26 +135,21 @@ Now all occupations are roughly the same distance apart from all other occupatio
 
 -  Agglomerative clustering is the most common type of hierarchical clustering
 use to group objects in clusters based on their similarity. 
-- It's also known as AGNES (Agglomerative Nesting). 
-  - The algorithm starts by treating each object as a singleton cluster. 
-  - Next, pairs of clusters are successively merged until all clusters have
-been merged into one big cluster containing all objects. 
--  The result is a tree-based representation of the objects, named dendrogram.
-- Agglomerative clustering works in a bottom-up manner. 
-- Each object is initially considered as a single-element cluster (leaf). 
-- At each step of the algorithm, the two clusters that are the most similar are combined into a new bigger cluster
-(nodes). 
+- It's also known as AGNES (Agglomerative Nesting) and works from the bottom up.
+  - The algorithm starts by treating each object as a singleton cluster (leaf). 
+  - At each step of the algorithm, the two clusters that are the most similar are combined into a new bigger cluster
+(nodes).  
 - This procedure is iterated until all points are member of just one single big
 cluster (root).
-
+-  The result is a tree-based representation of the object called a dendrogram.
 
 ### Diana
 
 - The inverse of agglomerative clustering is divisive clustering, which is also known as
 DIANA (Divise Analysis) and it works in a top-down manner. 
     - It begins with the root, in which all objects are included in a single cluster. 
-    - At each step of iteration, the most heterogeneous cluster is divided into two. 
-    - The process is iterated until all objects are in their own cluster.
+    - At each step of iteration, the most heterogeneous cluster is divided into two (nodes). 
+    - The process is iterated until all objects are in their own cluster (leaf).
 
 ### K-means
 
@@ -344,9 +347,9 @@ DT::datatable(filter(vis_clusters, sil_width<0), rownames = FALSE)
 
 ## Different than the Conference Board:
 
-It is known that the Conference Board created its clusters using K-means clustering with 8 clusters using NOC 2016 data, but beyond that their method is somewhat of a black box.  If we map from 2016 NOCs to 2021 NOCs we can create an alluvium plot that show how the occupations from the Conference Board clusters are split among our clusters.
+It is known that the Conference Board created its clusters using K-means clustering with 8 clusters using NOC 2016 data, but beyond that their method is somewhat of a black box.  If we map from 2016 NOCs to 2021 NOCs we can create an alluvium plot that show how the occupations from the Conference Board clusters flow into our clusters.  As you can see from the alluvium plot, the clustering is obviously quite different.
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, fig.height=6, fig.width=12}
 our_clusters <- vis_clusters%>%
   separate(NOC, into= c("noc_2021_v1_0_code","description"), sep = ":")%>%
   select(noc_2021_v1_0_code, new_cluster)
@@ -369,7 +372,7 @@ cluster <- c("STEM Professions",
 
 range <- c("a2:f10", "a12:f29", "a31:f44", "a46:f61", "a63:f75", "a77:f87","a89:f105","a107:f113")
 
-tbbl <- tibble(conf_cluster=cluster, range=range)%>%
+conf <- tibble(conf_cluster=cluster, range=range)%>%
   mutate(data=map2(cluster, range, get_conf))%>%
   unnest(data)%>%
   select(-range)%>%
@@ -379,7 +382,7 @@ tbbl <- tibble(conf_cluster=cluster, range=range)%>%
   mutate(noc_2021_v1_0_code=as.character(noc_2021_v1_0_code))%>%
   inner_join(our_clusters)
 
-grouped <- tbbl%>%
+grouped <- conf%>%
   group_by(conf_cluster, new_cluster)%>%
   summarize(freq=n())
 
@@ -393,16 +396,42 @@ ggplot(data = grouped,
   theme_void()
 ```
 
-## Higher silhouette value that the Conference Board:
+## Conference Board vs. our clusters :
+
+```{r}
+conf%>%
+DT::datatable(filter = 'top',
+                rownames = FALSE, 
+                extensions = c('Buttons', 'FixedColumns'),
+    options = list(
+    pageLength = 10,
+    dom = 'Bfrtip',
+    scrollX = TRUE,
+    buttons = c('csv', 'excel')))
+```
 
 
+
+## Higher measures of internal validity than Conference Board:
+
+Next we apply the conference board methodology (K-means, 8 clusters) to the NOC 2021 data, and compare the internal validity criteria with our AGNES clustering. We find that our clustering weakly dominates the Conference Board's clustering, when making an "apples to apples" comparison (i.e. using the same NOC2021 data set.)  In particular, Agnes dominates in terms of silhouette width and connectivity, and ties with K-means in terms of the Dunn index. 
+
+```{r}
+pc_valid <- clValid(tbbl$scaled[tbbl$data_set=="first_five"][[1]], nClust = 11, clMethods = "agnes", validation = "internal", method = "ward")
+thirty_five_valid <- clValid(tbbl[[2]][[1]], nClust = 8, clMethods = "kmeans", validation = "internal")
+
+compare <- data.frame(`Conference Board Cluster`=round(measures(thirty_five_valid)[1:3, 1, 1],2), 
+       `Agnes Clustering`= round(measures(pc_valid)[1:3, 1, 1],2))
+rownames(compare) <- c("Connectivity", "Dunn index", "Average silhouette width") 
+DT::datatable(compare, options=list(dom="t")) 
+```
 
 ## Cluster Means:
 
 Next we attach the cluster assignments to the scaled data and then calculate cluster means for each skill.  It would be nice to see how the cluster means are arranged relative to one another. To do so we can use a biplot, which takes high dimensional data (we have 35 skills) and represents it in 2 dimensional space. 
 
 ```{r}
-skills <- tbbl$scaled[tbbl$data_set=="2021"][[1]]%>% 
+skills <- tbbl$scaled[tbbl$data_set=="2021"][[1]]%>%
   rownames_to_column(var="NOC")%>%
   mutate(NOC=trimws(NOC))%>%
   full_join(vis_clusters)%>%
@@ -414,29 +443,33 @@ skills_raw_for_tbbl <- skills_raw%>%
   full_join(vis_clusters)%>%
   select(NOC, original_cluster, sil_width, new_cluster, everything())
 
-corrected_ave <- skills%>%
+new_cluster_ave <- skills%>%
   select(-sil_width)%>%
   group_by(new_cluster)%>%
   summarize(across(where(is.numeric), mean))
 
-top_five <- corrected_ave%>%
+top_five <- new_cluster_ave%>%
   pivot_longer(cols=-new_cluster, names_to ="skill", values_to = "scaled_score")%>%
   group_by(new_cluster)%>%
   arrange(new_cluster, desc(scaled_score))%>%
-  slice_max(order_by=scaled_score, n=5)
+  slice_max(order_by=scaled_score, n=5)%>%
+  mutate(scaled_score=round(scaled_score, 2))
+colnames(top_five) <- colnames(top_five)%>%
+  str_replace_all("_"," ")%>%
+  str_to_title()
 
 ```
 
 ## Biplot of new cluster means:
 
-Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point northwest (ish), indicating this is where high skill NOCs will be located (e.g. STEM).  In the north direction the skills are hard (making and fixing things), whereas in the west the skills are soft (managing people). If high skill NOCs are located to the Northwest, then low skill NOCs will be found to the Southeast (e.g Doers). 
+Consider the following biplot.  The arrows represent the projection of the 35 different skills into this 2 dimensional space.  The length of the arrows is proportional to the variance of the skill across NOCs, and the angle between two arrows is proportional to the correlation between the two skills. The fact that many arrows are overlapping suggests a fair degree of redundancy in the skill measures (variables measuring basically the same thing).  Notice that most arrows point northeast(ish), indicating this is where high skill NOCs will be located (e.g. STEM).  In the north direction the skills are hard (making and fixing things), whereas in the east the skills are soft (managing people). If high skill NOCs are located to the Northeast, then low skill NOCs will be found to the Southwest (e.g Doers, personal services and artists). 
 
 
 ```{r, fig.height=8, fig.width=8}
-corrected_res <- corrected_ave%>%
+new_cluster_prcomp <- new_cluster_ave%>%
   column_to_rownames(var="new_cluster")%>%
   prcomp()
-plt <- ggbiplot::ggbiplot(corrected_res, labels = corrected_ave$new_cluster, varname.size = 1.5, var.scale = .5, labels.size = 2)+
+plt <- ggbiplot::ggbiplot(new_cluster_prcomp, labels = new_cluster_ave$new_cluster, varname.size = 1.5, var.scale = .5, labels.size = 2)+
   theme_minimal()
 plotly::ggplotly(plt, tooltip = "varname")
 ```
@@ -463,7 +496,7 @@ cluster_vs_teer <- skills%>%
   tabyl(new_cluster, teer)
 colnames(cluster_vs_teer) <- c("Cluster", paste0("TEER: ", 0:5))
 
-DT::datatable(cluster_vs_teer, options=list(dom="t"), rownames = FALSE)
+DT::datatable(cluster_vs_teer, options=list(dom="t", pageLength=50), rownames = FALSE)
 ```
 
 Note the strong relationship between our clusters and the TEER clasifications.
@@ -474,7 +507,7 @@ chisq.test(cluster_vs_teer)
 
 
 
-## Finally, the data:
+## The raw data:
 
 ```{r}
 skills_raw_for_tbbl%>%
@@ -492,5 +525,27 @@ skills_raw_for_tbbl%>%
     scrollX = TRUE,
     buttons = c('csv', 'excel')))
 ```
+
+## And finally, the scaled data:
+
+```{r}
+skills%>%
+  mutate(across(where(is.numeric), \(x) round(x, 3)),
+         TEER=str_sub(NOC,2,2), .after="NOC",
+         across(where(is.character), \(x) as.factor(x))
+         )%>%
+  arrange(new_cluster, desc(sil_width))%>%
+  DT::datatable(filter = 'top',
+                rownames = FALSE, 
+                extensions = c('Buttons', 'FixedColumns'),
+    options = list(
+    pageLength = 10,
+    dom = 'Bfrtip',
+    scrollX = TRUE,
+    buttons = c('csv', 'excel')))
+```
+
+
+
 
 # References
