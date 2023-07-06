@@ -491,18 +491,32 @@ DT::datatable(filter = 'top',
 ## Relationship between TEER and New clusters:
 
 ```{r}
-cluster_vs_teer <- skills%>%
-  mutate(teer=str_sub(NOC, 2,2), .after=NOC)%>%
-  tabyl(new_cluster, teer)
-colnames(cluster_vs_teer) <- c("Cluster", paste0("TEER: ", 0:5))
+cluster_vs_teer_raw <- skills%>%
+  mutate(teer=as.numeric(str_sub(NOC, 2,2)), .after=NOC)%>%
+  select(new_cluster, teer)
 
-DT::datatable(cluster_vs_teer, options=list(dom="t", pageLength=50), rownames = FALSE)
+ordering <-cluster_vs_teer_raw  %>%
+  group_by(new_cluster)%>%
+  summarize(mean_teer=mean(teer))%>%
+  arrange(mean_teer)
+
+cluster_vs_teer <- cluster_vs_teer_raw%>%
+  tabyl(new_cluster, teer)
+
+for_display <- cluster_vs_teer%>%
+  full_join(ordering)%>%
+  arrange(mean_teer)%>%
+  select(-mean_teer)
+colnames(for_display) <- c("Cluster", paste0("TEER: ", 0:5))
+
+DT::datatable(for_display, options=list(dom="t", pageLength=50), rownames = FALSE)
 ```
 
 Note the strong relationship between our clusters and the TEER clasifications.
 
 ```{r, warning=FALSE}
-chisq.test(cluster_vs_teer)
+cluster_vs_teer%>%
+  chisq.test()
 ```
 
 
