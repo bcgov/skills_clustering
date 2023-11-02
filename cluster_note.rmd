@@ -297,9 +297,11 @@ ggplotly(plt, tooltip = "name")
 
 
 ```{r, warning=FALSE, fig.height=10}
-plt <- fviz_dend(vis_mod, horiz = TRUE, show_labels = TRUE)
+plt <- fviz_dend(vis_mod, horiz = TRUE, show_labels = TRUE, cex = .06, lwd=.06)
 ggplotly(plt, tooltip = "label")%>%
-          style(textposition = "right")
+          style(textposition = "right")%>% 
+        plotly::config(toImageButtonOptions = list(format = "svg", 
+            width = 960, height = 720))
 ```
 
 - Agnes, 35D data,  11 clusters, Euclidean distance (suggested by maximal value of Dunn statistic)
@@ -312,9 +314,11 @@ ggplotly(plt, tooltip = "name")
 
 
 ```{r, warning=FALSE, fig.height=10}
-plt <- fviz_dend(dunn_mod, horiz = TRUE, show_labels = TRUE)
+plt <- fviz_dend(dunn_mod, horiz = TRUE, show_labels = TRUE, cex = .06, lwd=.06)
 ggplotly(plt, tooltip = "label")%>%
-          style(textposition = "right")
+          style(textposition = "right")%>% 
+        plotly::config(toImageButtonOptions = list(format = "svg", 
+            width = 960, height = 720))
 ```
 
 
